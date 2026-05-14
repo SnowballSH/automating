@@ -10,6 +10,7 @@ Benchmark settings:
 - Rounds: 15
 - Accepting density: 75% of states
 - Seed: `0xdfabeee`
+- Speedup is `naive time / public DFA time`.
 
 ## 5/14/2026
 

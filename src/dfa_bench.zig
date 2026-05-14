@@ -58,7 +58,6 @@ const bench_cases = [_]BenchCase{
     },
 };
 
-/// Runs all DFA benchmarks and prints a machine-readable summary.
 pub fn main(_: std.process.Init) !void {
     const allocator = std.heap.smp_allocator;
 
@@ -126,15 +125,14 @@ fn fillRandomCase(case: BenchCase, data: *BenchData) void {
     const random = prng.random();
 
     for (0..case.states) |state| {
-        const compact_base = state * data.padded_alphabet;
+        const row_base = state * data.padded_alphabet;
 
         for (0..case.alphabet) |symbol| {
-            const next_state = random.uintLessThan(usize, case.states);
-            data.delta_compact[compact_base + symbol] = @intCast(next_state);
+            data.delta_compact[row_base + symbol] = @intCast(random.uintLessThan(usize, case.states));
         }
 
         for (case.alphabet..data.padded_alphabet) |symbol| {
-            data.delta_compact[compact_base + symbol] = 0;
+            data.delta_compact[row_base + symbol] = 0;
         }
     }
 
@@ -150,15 +148,14 @@ fn fillWorstCase(case: BenchCase, data: *BenchData) void {
     const stride = nearestOddStride(case.states / 2 + 1);
 
     for (0..case.states) |state| {
-        const compact_base = state * data.padded_alphabet;
+        const row_base = state * data.padded_alphabet;
 
         for (0..case.alphabet) |symbol| {
-            const next_state = (state + stride + symbol * 17) % case.states;
-            data.delta_compact[compact_base + symbol] = @intCast(next_state);
+            data.delta_compact[row_base + symbol] = @intCast((state + stride + symbol * 17) % case.states);
         }
 
         for (case.alphabet..data.padded_alphabet) |symbol| {
-            data.delta_compact[compact_base + symbol] = 0;
+            data.delta_compact[row_base + symbol] = 0;
         }
     }
 
@@ -187,7 +184,7 @@ fn fillAccepting(case: BenchCase, data: *BenchData) void {
     }
 }
 
-/// Times the public DFA interface over repeated full-input runs.
+/// Times repeated full-input runs through the public DFA interface.
 fn benchDFA(dfa: *const DFA, input: []const DFA.Symbol) BenchResult {
     const start = nowNs();
     var final_state: DFA.State = 0;
@@ -195,7 +192,7 @@ fn benchDFA(dfa: *const DFA, input: []const DFA.Symbol) BenchResult {
 
     for (0..bench_rounds) |_| {
         final_state = dfa.processFromState(input, 0);
-        accepted_count += @intFromBool(dfa.process(input));
+        accepted_count += @intFromBool(dfa.isAccepting(final_state));
     }
 
     std.mem.doNotOptimizeAway(final_state);
@@ -233,14 +230,10 @@ fn printCaseHeader(case: BenchCase, padded_alphabet: usize) void {
 
 /// Prints elapsed time and throughput for one implementation.
 fn printResult(label: []const u8, result: BenchResult, input_len: usize) void {
-    const transitions = input_len * bench_rounds * 2;
-    const seconds = nsToSeconds(result.ns);
-    const mtps = @as(f64, @floatFromInt(transitions)) / seconds / 1_000_000.0;
-
     std.debug.print("  {s}: {d:.3} ms, {d:.1} M transitions/s, final={d}, accepted_count={d}\n", .{
         label,
         nsToMillis(result.ns),
-        mtps,
+        @as(f64, @floatFromInt(input_len * bench_rounds)) / nsToSeconds(result.ns) / 1_000_000.0,
         result.final_state,
         result.accepted_count,
     });

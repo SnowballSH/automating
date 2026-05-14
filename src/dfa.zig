@@ -8,7 +8,7 @@
 
 const std = @import("std");
 
-/// The following struct implements an optimized DFA.
+/// Deterministic finite automaton with a compact transition table.
 ///
 /// The table uses a compact `u32` state representation. On a 64-bit target this
 /// halves transition-table bandwidth compared with `usize`, which matters
@@ -24,12 +24,9 @@ const std = @import("std");
 /// owns both allocations and controls whether the table is static, stack-backed,
 /// or heap-backed.
 ///
-/// Assumptions: if we have n states and m logical symbols, then:
-/// 1. Q is simply {0, 1, 2, ..., n-1}
-/// 2. Sigma is simply {0, 1, 2, ..., m-1}
-/// 3. delta is a n by paddedAlphabetSize(m) table, each live cell containing a state
-/// 4. q0 is an integer in {0, 1, 2, ..., n-1}
-/// 5. F is a bitset of length n.
+/// States and symbols are dense zero-based ranges. For `n` states and `m`
+/// symbols, `delta` is an `n * paddedAlphabetSize(m)` table and `F` is a bitset
+/// with at least `n` bits.
 pub const DFA = struct {
     /// Compact state identifier used by the transition table.
     pub const State = u32;
@@ -44,7 +41,7 @@ pub const DFA = struct {
     F: std.DynamicBitSetUnmanaged,
     alphabetShift: u6,
 
-    /// Creates a new optimized DFA.
+    /// Creates a new DFA.
     ///
     /// `alphabetSize` is the logical number of symbols accepted by `next`,
     /// `processFromState`, and `process`. `delta` must contain one row per
@@ -69,13 +66,11 @@ pub const DFA = struct {
 
     /// Verifies that constructor inputs fit the compact DFA representation.
     fn validate(stateSize: usize, alphabetSize: usize, delta: []const State, q0: State, F: std.DynamicBitSetUnmanaged) void {
-        const padded_size = paddedAlphabetSize(alphabetSize);
-
         std.debug.assert(stateSize > 0);
         std.debug.assert(alphabetSize > 0);
         std.debug.assert(stateSize <= std.math.maxInt(State));
         std.debug.assert(alphabetSize <= std.math.maxInt(Symbol));
-        std.debug.assert(delta.len == (std.math.mul(usize, stateSize, padded_size) catch unreachable));
+        std.debug.assert(delta.len == (std.math.mul(usize, stateSize, paddedAlphabetSize(alphabetSize)) catch unreachable));
         std.debug.assert(q0 < stateSize);
         std.debug.assert(F.capacity() >= stateSize);
     }
@@ -133,36 +128,29 @@ pub const DFA = struct {
         var cur_state = startState;
         const shift = self.alphabetShift;
         for (symbols) |symbol| {
-            const cur_index = indexOf(cur_state);
-            const symbol_index = self.checkedSymbolIndex(symbol);
-            cur_state = self.delta[(cur_index << shift) + symbol_index];
+            cur_state = self.delta[(indexOf(cur_state) << shift) + self.checkedSymbolIndex(symbol)];
         }
 
         return cur_state;
     }
 
-    /// Processes a list of symbols in order from q0 and returns
-    /// whether or not the DFA accepts the input.
+    /// Processes a list of symbols from q0 and returns whether the DFA accepts it.
     pub fn process(self: *const DFA, symbols: []const Symbol) bool {
         return self.isAccepting(self.processFromState(symbols, self.q0));
     }
 };
 
-// Unit Tests
-
 test "DFA - L = {s in {0,1}* | s ends in 1}" {
     const allocator = std.testing.allocator;
 
-    // Alphabet: {0, 1}
-    // States: 0 (last was '0' or start), 1 (last was '1')
     const delta = [_]DFA.State{
-        0, 1, // State 0 transitions: 0 -> 0, 1 -> 1
-        0, 1, // State 1 transitions: 0 -> 0, 1 -> 1
+        0, 1,
+        0, 1,
     };
 
     var F = try std.DynamicBitSetUnmanaged.initEmpty(allocator, 2);
     defer F.deinit(allocator);
-    F.set(1); // State 1 is our only accepting state
+    F.set(1);
 
     const dfa = DFA.init(2, 2, &delta, 0, F);
 
@@ -188,18 +176,15 @@ test "DFA - L = {s in {0,1}* | s ends in 1}" {
 test "DFA - L = {s in {0,1}* | # of 1s in s is a multiple of 3}" {
     const allocator = std.testing.allocator;
 
-    // Alphabet: {0, 1}
-    // States track the count of '1's modulo 3.
-    // States: 0 (mod 3 == 0), 1 (mod 3 == 1), 2 (mod 3 == 2)
     const delta = [_]DFA.State{
-        0, 1, // State 0: '0' -> 0, '1' -> 1
-        1, 2, // State 1: '0' -> 1, '1' -> 2
-        2, 0, // State 2: '0' -> 2, '1' -> 0
+        0, 1,
+        1, 2,
+        2, 0,
     };
 
     var F = try std.DynamicBitSetUnmanaged.initEmpty(allocator, 3);
     defer F.deinit(allocator);
-    F.set(0); // Accept iff the number of 1s is a multiple of 3
+    F.set(0);
 
     const dfa = DFA.init(3, 2, &delta, 0, F);
 
@@ -225,8 +210,7 @@ test "DFA - L = {s in {0,1}* | # of 1s in s is a multiple of 3}" {
 test "DFA - Single State Automaton" {
     const allocator = std.testing.allocator;
 
-    // A machine with 1 state that accepts everything
-    const delta = [_]DFA.State{ 0, 0, 0, 0 }; // 3 live symbols plus 1 padded cell
+    const delta = [_]DFA.State{ 0, 0, 0, 0 };
 
     var F = try std.DynamicBitSetUnmanaged.initEmpty(allocator, 1);
     defer F.deinit(allocator);
@@ -256,7 +240,6 @@ test "DFA - Pseudo-Random Graph Stress Test" {
     const delta = try allocator.alloc(DFA.State, N * padded_M);
     defer allocator.free(delta);
 
-    // PRNG
     var prng_state: usize = 15251;
     for (0..N) |state| {
         const row_base = state * padded_M;
@@ -292,14 +275,10 @@ test "DFA - Pseudo-Random Graph Stress Test" {
 
     var expected_state: DFA.State = 0;
     for (input) |sym| {
-        const expected_index: usize = @intCast(expected_state);
-        const symbol_index: usize = @intCast(sym);
-        expected_state = delta[expected_index * padded_M + symbol_index];
+        expected_state = delta[@as(usize, @intCast(expected_state)) * padded_M + @as(usize, @intCast(sym))];
     }
 
-    const actual_state = dfa.processFromState(input, 0);
-
-    try std.testing.expectEqual(expected_state, actual_state);
+    try std.testing.expectEqual(expected_state, dfa.processFromState(input, 0));
     try std.testing.expectEqual(F.isSet(expected_state), dfa.process(input));
 }
 

@@ -1,0 +1,5 @@
+.env
+.zig-cache/
+zig-out/
+docs/
+*.a

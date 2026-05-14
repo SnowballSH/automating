@@ -62,3 +62,142 @@ pub const DFA = struct {
         return self.isAccepting(self.processFromState(symbols, self.q0));
     }
 };
+
+// Unit Tests
+
+test "DFA - L = {s in {0,1}* | s ends in 1}" {
+    const allocator = std.testing.allocator;
+
+    // Alphabet: {0, 1}
+    // States: 0 (last was '0' or start), 1 (last was '1')
+    var delta = [_]usize{
+        0, 1, // State 0 transitions: 0 -> 0, 1 -> 1
+        0, 1, // State 1 transitions: 0 -> 0, 1 -> 1
+    };
+
+    var F = try std.DynamicBitSetUnmanaged.initEmpty(allocator, 2);
+    defer F.deinit(allocator);
+    F.set(1); // State 1 is our only accepting state
+
+    const dfa = DFA.init(2, 2, &delta, 0, F);
+
+    try std.testing.expect(!dfa.isAccepting(0));
+    try std.testing.expect(dfa.isAccepting(1));
+
+    try std.testing.expectEqual(@as(usize, 1), dfa.next(0, 1));
+    try std.testing.expectEqual(@as(usize, 0), dfa.next(1, 0));
+
+    var accept_input = [_]usize{ 0, 1, 1 };
+    try std.testing.expect(dfa.process(&accept_input));
+
+    var single_accept = [_]usize{1};
+    try std.testing.expect(dfa.process(&single_accept));
+
+    var reject_input = [_]usize{ 1, 0, 1, 0 };
+    try std.testing.expect(!dfa.process(&reject_input));
+
+    var trivial_reject = [_]usize{};
+    try std.testing.expect(!dfa.process(&trivial_reject));
+}
+
+test "DFA - L = {s in {0,1}* | # of 1s in s is a multiple of 3}" {
+    const allocator = std.testing.allocator;
+
+    // Alphabet: {0, 1}
+    // States track the count of '1's modulo 3.
+    // States: 0 (mod 3 == 0), 1 (mod 3 == 1), 2 (mod 3 == 2)
+    var delta = [_]usize{
+        0, 1, // State 0: '0' -> 0, '1' -> 1
+        1, 2, // State 1: '0' -> 1, '1' -> 2
+        2, 0, // State 2: '0' -> 2, '1' -> 0
+    };
+
+    var F = try std.DynamicBitSetUnmanaged.initEmpty(allocator, 3);
+    defer F.deinit(allocator);
+    F.set(0); // Accept iff the number of 1s is a multiple of 3
+
+    const dfa = DFA.init(3, 2, &delta, 0, F);
+
+    var ones = [_]usize{ 1, 1 };
+    try std.testing.expectEqual(@as(usize, 0), dfa.processFromState(&ones, 1));
+
+    var zeros = [_]usize{0};
+    try std.testing.expectEqual(@as(usize, 2), dfa.processFromState(&zeros, 2));
+
+    var input_accept = [_]usize{ 1, 0, 1, 0, 1 };
+    try std.testing.expect(dfa.process(&input_accept));
+
+    var input_accept_2 = [_]usize{1} ** 2025;
+    try std.testing.expect(dfa.process(&input_accept_2));
+
+    var input_reject = [_]usize{ 1, 0, 1 };
+    try std.testing.expect(!dfa.process(&input_reject));
+
+    var trivial_accept = [_]usize{};
+    try std.testing.expect(dfa.process(&trivial_accept));
+}
+
+test "DFA - Single State Automaton" {
+    const allocator = std.testing.allocator;
+
+    // A machine with 1 state that accepts everything
+    var delta = [_]usize{ 0, 0, 0 }; // State 0 transitions to 0 for all 3 symbols
+
+    var F = try std.DynamicBitSetUnmanaged.initEmpty(allocator, 1);
+    defer F.deinit(allocator);
+    F.set(0);
+
+    const dfa = DFA.init(1, 3, &delta, 0, F);
+
+    var input = [_]usize{ 2, 0, 1, 2, 2 };
+
+    try std.testing.expectEqual(@as(usize, 0), dfa.processFromState(&input, 0));
+    try std.testing.expect(dfa.process(&input));
+}
+
+test "DFA - Pseudo-Random Graph Stress Test" {
+    const allocator = std.testing.allocator;
+    const N: usize = 251;
+    const M: usize = 15251;
+
+    var delta = try allocator.alloc(usize, N * M);
+    defer allocator.free(delta);
+
+    // PRNG
+    var prng_state: usize = 15251;
+    for (0..N * M) |i| {
+        prng_state = prng_state *% 1103515245 +% 12345;
+        delta[i] = prng_state % N;
+    }
+
+    var F = try std.DynamicBitSetUnmanaged.initEmpty(allocator, N);
+    defer F.deinit(allocator);
+
+    for (0..N) |i| {
+        prng_state = prng_state *% 1103515245 +% 12345;
+        if (prng_state % 7 == 0) {
+            F.set(i);
+        }
+    }
+
+    const dfa = DFA.init(N, M, delta, 0, F);
+
+    const input_len = 15251;
+    var input = try allocator.alloc(usize, input_len);
+    defer allocator.free(input);
+
+    for (0..input_len) |i| {
+        prng_state = prng_state *% 1103515245 +% 12345;
+        input[i] = prng_state % M;
+    }
+
+    var expected_state: usize = 0;
+    for (input) |sym| {
+        expected_state = delta[expected_state * M + sym];
+    }
+
+    const actual_state = dfa.processFromState(input, 0);
+
+    try std.testing.expectEqual(expected_state, actual_state);
+    try std.testing.expectEqual(F.isSet(expected_state), dfa.process(input));
+}

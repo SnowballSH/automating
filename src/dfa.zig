@@ -10,16 +10,6 @@ const std = @import("std");
 
 /// Deterministic finite automaton with a compact transition table.
 ///
-/// The table uses a compact `u32` state representation. On a 64-bit target this
-/// halves transition-table bandwidth compared with `usize`, which matters
-/// because DFA execution is usually one dependent table load per input symbol.
-///
-/// Each logical row is padded from `alphabetSize` to the next power of two.
-/// Padded cells are never addressed by valid input symbols; they exist so the
-/// row base can be computed as `state << alphabetShift` instead of
-/// `state * alphabetSize`. That removes a multiply from the transition hot path
-/// and leaves a single add after the shift.
-///
 /// The DFA borrows its transition table and accepting-state bitset. The caller
 /// owns both allocations and controls whether the table is static, stack-backed,
 /// or heap-backed.
@@ -76,10 +66,7 @@ pub const DFA = struct {
     }
 
     /// Returns the power-of-two row stride required for an alphabet.
-    ///
-    /// Callers use this when allocating or statically declaring `delta`.
-    /// For example, a DFA with `3` logical symbols must provide rows of `4`
-    /// cells, while a DFA with `256` symbols already has rows of `256` cells.
+    /// Currently implemented as `ceil(2^alphabetSize)`.
     pub fn paddedAlphabetSize(alphabetSize: usize) usize {
         std.debug.assert(alphabetSize > 0);
         std.debug.assert(alphabetSize <= std.math.maxInt(Symbol));

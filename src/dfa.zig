@@ -113,9 +113,9 @@ pub const Dfa = struct {
         const expected_delta_len = std.math.mul(usize, @intCast(self.state_size), padded_size) catch return false;
         if (self.delta.len != expected_delta_len) return false;
 
-        for (0..@as(usize, @intCast(self.state_size))) |state| {
+        for (0..self.state_size) |state| {
             const row_start = state << self.alphabet_shift;
-            for (0..@as(usize, @intCast(self.alphabet_size))) |symbol| {
+            for (0..self.alphabet_size) |symbol| {
                 if (self.delta[row_start + symbol] >= self.state_size) return false;
             }
         }
@@ -294,7 +294,7 @@ pub const Dfa = struct {
                 const product_state = pairState(left, right, right_state_size);
                 const product_row_start = @as(usize, @intCast(product_state)) * padded_size;
 
-                for (0..@as(usize, @intCast(self.alphabet_size))) |symbol_usize| {
+                for (0..self.alphabet_size) |symbol_usize| {
                     const symbol: Symbol = @intCast(symbol_usize);
                     delta[product_row_start + symbol_usize] = pairState(
                         self.next(left, symbol),

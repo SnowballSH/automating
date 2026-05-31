@@ -52,9 +52,7 @@ pub const TuringMachine = struct {
         /// `blank` if `pos` is outside the materialized tape range.
         pub fn at(self: *const RunResult, pos: i64, blank: Symbol) Symbol {
             if (pos < self.tape_min) return blank;
-            const idx_i64 = pos - self.tape_min;
-            if (idx_i64 < 0) return blank;
-            const idx: usize = @intCast(idx_i64);
+            const idx: usize = @intCast(pos - self.tape_min);
             if (idx >= self.tape.len) return blank;
             return self.tape[idx];
         }

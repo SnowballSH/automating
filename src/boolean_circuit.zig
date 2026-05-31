@@ -224,6 +224,25 @@ const Builder = struct {
         }
     }
 
+    /// Adds a prologue that requires `tape[0..n]` to be in `{zero, one}` and
+    /// `tape[n]` to be `blank`, then walks the head back to position 0 in
+    /// `home`. Any other tape pattern transitions to `reject`.
+    fn addArityGuard(self: *Builder, entry: State, n: usize, reject: State, home: State) CompileError!void {
+        var scan = entry;
+        for (0..n) |_| {
+            const next = try self.newState();
+            try self.addTransition(scan, zero, .{ .next = next, .write = zero, .dir = .right });
+            try self.addTransition(scan, one, .{ .next = next, .write = one, .dir = .right });
+            try self.addTransition(scan, blank, .{ .next = reject, .write = blank, .dir = .stay });
+            scan = next;
+        }
+        const ok = try self.newState();
+        try self.addTransition(scan, blank, .{ .next = ok, .write = blank, .dir = .stay });
+        try self.addTransition(scan, zero, .{ .next = reject, .write = zero, .dir = .stay });
+        try self.addTransition(scan, one, .{ .next = reject, .write = one, .dir = .stay });
+        try self.walk(ok, n, .left, home);
+    }
+
     fn build(
         self: *Builder,
         start: State,
@@ -274,10 +293,12 @@ const Builder = struct {
 ///   fits in `TuringMachine.State`.
 ///
 /// ENSURES:
-/// - On success, returns a `TuringMachine.Owned` `M` such that for every
-///   `x in {zero, one}^{circuit.num_inputs}`, `M.run(x)` halts in
-///   `q_accept` iff `circuit.evaluate(x)[0] = true`, and in `q_reject`
-///   otherwise.
+/// - On success, returns a `TuringMachine.Owned` `M` whose accepted language
+///   is exactly `{ x in {zero, one}^{circuit.num_inputs} | C(x) = 1 }`:
+///   - For `x in {zero, one}^{circuit.num_inputs}`, `M.run(x)` halts in
+///     `q_accept` iff `circuit.evaluate(x)[0] = true`, and in `q_reject`
+///     otherwise.
+///   - For inputs of any other length, `M.run(x)` halts in `q_reject`.
 /// - On invalid output count, returns `error.NotSingleOutput`.
 /// - On state-index overflow, returns `error.CircuitTooLarge`.
 /// - On allocation failure, returns `error.OutOfMemory`.
@@ -295,31 +316,12 @@ pub fn compileToTuringMachine(
     const accept = try builder.newState();
     const reject = try builder.newState();
 
-    const num_inputs: usize = circuit.num_inputs;
-
-    // Enforce exact input length `num_inputs`:
-    // - positions [0, num_inputs) must be in {zero, one}
-    // - position num_inputs must be blank
-    var length_scan = start;
-    for (0..num_inputs) |_| {
-        const next = try builder.newState();
-        try builder.addTransition(length_scan, zero, .{ .next = next, .write = zero, .dir = .right });
-        try builder.addTransition(length_scan, one, .{ .next = next, .write = one, .dir = .right });
-        try builder.addTransition(length_scan, blank, .{ .next = reject, .write = blank, .dir = .stay });
-        length_scan = next;
-    }
-
-    const length_ok = try builder.newState();
-    try builder.addTransition(length_scan, blank, .{ .next = length_ok, .write = blank, .dir = .stay });
-    try builder.addTransition(length_scan, zero, .{ .next = reject, .write = zero, .dir = .stay });
-    try builder.addTransition(length_scan, one, .{ .next = reject, .write = one, .dir = .stay });
-
     const home = try builder.newState();
-    try builder.walk(length_ok, num_inputs, .left, home);
+    try builder.addArityGuard(start, circuit.num_inputs, reject, home);
 
     var current = home;
     for (circuit.gates, 0..) |gate, gate_idx| {
-        const target = num_inputs + gate_idx;
+        const target = circuit.num_inputs + gate_idx;
         const exit = try builder.newState();
         try compileGate(&builder, gate, target, current, exit, reject);
         current = exit;
@@ -603,6 +605,16 @@ test "compileToTuringMachine - NOT" {
     const circuit = BooleanCircuit.init(1, &gates, &outputs);
 
     try enumerateInputs(allocator, &circuit);
+}
+
+test "compileToTuringMachine - no-gate circuit returns the chosen input bit" {
+    const allocator = std.testing.allocator;
+    const empty_gates: []const BooleanCircuit.Gate = &.{};
+    for ([_]BooleanCircuit.WireId{ 0, 1 }) |output_wire| {
+        const outputs = [_]BooleanCircuit.WireId{output_wire};
+        const circuit = BooleanCircuit.init(2, empty_gates, &outputs);
+        try enumerateInputs(allocator, &circuit);
+    }
 }
 
 test "compileToTuringMachine - rejects non-arity inputs" {

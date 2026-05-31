@@ -295,9 +295,31 @@ pub fn compileToTuringMachine(
     const accept = try builder.newState();
     const reject = try builder.newState();
 
-    var current = start;
+    const num_inputs: usize = circuit.num_inputs;
+
+    // Enforce exact input length `num_inputs`:
+    // - positions [0, num_inputs) must be in {zero, one}
+    // - position num_inputs must be blank
+    var length_scan = start;
+    for (0..num_inputs) |_| {
+        const next = try builder.newState();
+        try builder.addTransition(length_scan, zero, .{ .next = next, .write = zero, .dir = .right });
+        try builder.addTransition(length_scan, one, .{ .next = next, .write = one, .dir = .right });
+        try builder.addTransition(length_scan, blank, .{ .next = reject, .write = blank, .dir = .stay });
+        length_scan = next;
+    }
+
+    const length_ok = try builder.newState();
+    try builder.addTransition(length_scan, blank, .{ .next = length_ok, .write = blank, .dir = .stay });
+    try builder.addTransition(length_scan, zero, .{ .next = reject, .write = zero, .dir = .stay });
+    try builder.addTransition(length_scan, one, .{ .next = reject, .write = one, .dir = .stay });
+
+    const home = try builder.newState();
+    try builder.walk(length_ok, num_inputs, .left, home);
+
+    var current = home;
     for (circuit.gates, 0..) |gate, gate_idx| {
-        const target = circuit.num_inputs + gate_idx;
+        const target = num_inputs + gate_idx;
         const exit = try builder.newState();
         try compileGate(&builder, gate, target, current, exit, reject);
         current = exit;
@@ -543,6 +565,20 @@ fn expectCompiledMatches(
     try std.testing.expectEqual(expected_outcome, result.outcome);
 }
 
+fn expectCompiledRejects(
+    allocator: std.mem.Allocator,
+    circuit: *const BooleanCircuit,
+    input: []const Symbol,
+) !void {
+    var owned = try compileToTuringMachine(allocator, circuit);
+    defer owned.deinit(allocator);
+
+    var result = try owned.machine.run(allocator, input, 100_000);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(TuringMachine.Outcome.reject, result.outcome);
+}
+
 fn enumerateInputs(
     allocator: std.mem.Allocator,
     circuit: *const BooleanCircuit,
@@ -567,6 +603,22 @@ test "compileToTuringMachine - NOT" {
     const circuit = BooleanCircuit.init(1, &gates, &outputs);
 
     try enumerateInputs(allocator, &circuit);
+}
+
+test "compileToTuringMachine - rejects non-arity inputs" {
+    const allocator = std.testing.allocator;
+
+    const not_gates = [_]BooleanCircuit.Gate{.{ .kind = .not, .a = 0, .b = 0 }};
+    const not_outputs = [_]BooleanCircuit.WireId{1};
+    const not_circuit = BooleanCircuit.init(1, &not_gates, &not_outputs);
+    try expectCompiledRejects(allocator, &not_circuit, &[_]Symbol{});
+    try expectCompiledRejects(allocator, &not_circuit, &[_]Symbol{ one, zero });
+
+    const and_gates = [_]BooleanCircuit.Gate{.{ .kind = .and_, .a = 0, .b = 1 }};
+    const and_outputs = [_]BooleanCircuit.WireId{2};
+    const and_circuit = BooleanCircuit.init(2, &and_gates, &and_outputs);
+    try expectCompiledRejects(allocator, &and_circuit, &[_]Symbol{one});
+    try expectCompiledRejects(allocator, &and_circuit, &[_]Symbol{ one, zero, one });
 }
 
 test "compileToTuringMachine - AND, OR, NAND, NOR over 2 inputs" {
